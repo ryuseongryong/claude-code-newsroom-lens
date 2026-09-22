@@ -8,10 +8,11 @@ import pytest
 
 from app.llm import bedrock, lens
 from app.llm.bedrock import LensError, parse_json_object
+from app.config import FEEDS
 from app.store import ArticleStore
 from app.store.models import Article
 
-SOURCES = ("bbc", "guardian", "nhk", "yna")
+SOURCES = tuple(s.key for s in FEEDS)
 
 
 @pytest.fixture(autouse=True)
@@ -114,7 +115,8 @@ async def test_happy_path_shapes_frames_evidence_and_coverage(monkeypatch):
 
     cluster = out["clusters"][0]
     assert cluster["covered"] == ["bbc", "guardian"]
-    assert cluster["uncovered"] == ["nhk", "yna"]
+    # 인용하지 않은 매체는 전부 미보도다. 소스를 추가해도 자동으로 따라와야 한다.
+    assert cluster["uncovered"] == [k for k in SOURCES if k not in ("bbc", "guardian")]
     assert cluster["frames"]["nhk"] == "미보도"
     # 근거가 인덱스가 아니라 실제 링크까지 해석되어 나가야 한다.
     assert [e["index"] for e in cluster["evidence"]["bbc"]] == [0, 2]
@@ -274,3 +276,157 @@ async def test_second_call_in_same_bucket_is_served_from_cache(monkeypatch):
 def test_bucket_advances_every_ten_minutes():
     assert lens.current_bucket(0) == lens.current_bucket(599)
     assert lens.current_bucket(600) == lens.current_bucket(0) + 1
+
+
+# ── 논조 (Bonus C) ────────────────────────────────────────────────────────────
+
+
+async def test_tone_is_passed_through_for_covered_media(monkeypatch):
+    reply = _model_reply(
+        {
+            "overview": "o",
+            "clusters": [
+                {
+                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
+                    "tone": {"bbc": 0, "guardian": -2},
+                }
+            ],
+        }
+    )
+    out = await _build(monkeypatch, reply)
+    assert out["clusters"][0]["tone"]["bbc"] == 0
+    assert out["clusters"][0]["tone"]["guardian"] == -2
+
+
+async def test_tone_out_of_range_is_clamped_not_rejected(monkeypatch):
+    """막대 폭을 이 값으로 그리므로 범위를 벗어나면 레이아웃이 깨진다."""
+    reply = _model_reply(
+        {
+            "overview": "o",
+            "clusters": [
+                {
+                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
+                    "tone": {"bbc": 99, "guardian": -99},
+                }
+            ],
+        }
+    )
+    out = await _build(monkeypatch, reply)
+    assert out["clusters"][0]["tone"] == {**out["clusters"][0]["tone"], "bbc": 2, "guardian": -2}
+
+
+async def test_unparseable_tone_falls_back_to_neutral(monkeypatch):
+    reply = _model_reply(
+        {
+            "overview": "o",
+            "clusters": [
+                {
+                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
+                    # 모델은 실제로 이런 값들을 보낸다.
+                    "tone": {"bbc": "중립", "guardian": 1.6},
+                }
+            ],
+        }
+    )
+    out = await _build(monkeypatch, reply)
+    assert out["clusters"][0]["tone"]["bbc"] == 0      # 문자열 → 0
+    assert out["clusters"][0]["tone"]["guardian"] == 2  # 1.6 → round → 2
+
+
+async def test_uncovered_media_tone_is_zero(monkeypatch):
+    reply = _model_reply(
+        {
+            "overview": "o",
+            "clusters": [
+                {
+                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
+                    "tone": {"bbc": 1, "guardian": 1, "nhk": -2},   # nhk 는 미보도인데 논조를 줬다
+                }
+            ],
+        }
+    )
+    out = await _build(monkeypatch, reply)
+    assert out["clusters"][0]["tone"]["nhk"] == 0
+    assert "nhk" in out["clusters"][0]["uncovered"]
+
+
+async def test_every_source_appears_in_frames_tone_and_sources(monkeypatch):
+    """소스를 추가해도 프런트가 키 누락으로 깨지지 않아야 한다."""
+    reply = _model_reply(
+        {
+            "overview": "o",
+            "clusters": [_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]})],
+        }
+    )
+    out = await _build(monkeypatch, reply)
+    c = out["clusters"][0]
+    for field in ("frames", "tone", "sources", "evidence"):
+        assert set(c[field]) == set(SOURCES), f"{field} 키 누락"
+
+
+def test_prompt_enumerates_every_configured_source():
+    """매체 목록을 하드코딩하지 않았음을 증명한다."""
+    from app.llm.prompts import SYSTEM_PROMPT
+
+    for spec in FEEDS:
+        assert f'"{spec.key}"' in SYSTEM_PROMPT, spec.key
+        assert spec.label in SYSTEM_PROMPT, spec.label
+    assert f"{len(FEEDS)}개 국제 뉴스 매체" in SYSTEM_PROMPT
+
+
+# ── 잘못된 이스케이프 수리 (실측 버그) ───────────────────────────────────────
+
+
+def test_repairs_invalid_single_quote_escape():
+    """모델이 아포스트로피를 \\' 로 이스케이프한다. JSON 표준에 없어서 문서 전체가 거부된다.
+
+    2026-09-22 실측: 제목 40개 묶음이 이것 하나 때문에 통째로 버려졌다.
+    """
+    raw = r'{"titles": [{"ko": "전 \'암살단\' 지도자, 감비아 군사 재판 출석"}]}'
+    import json as _json
+    with pytest.raises(_json.JSONDecodeError):
+        _json.loads(raw)                       # 표준 파서는 거부한다
+    out = parse_json_object(raw)               # 우리는 살려낸다
+    assert out["titles"][0]["ko"] == "전 '암살단' 지도자, 감비아 군사 재판 출석"
+
+
+def test_repair_preserves_legitimate_escapes():
+    from app.llm.bedrock import repair_json_escapes
+
+    # 정당한 이스케이프는 건드리지 않는다.
+    assert repair_json_escapes(r'"a\nb"') == r'"a\nb"'
+    assert repair_json_escapes(r'"a\"b"') == r'"a\"b"'
+    assert repair_json_escapes(r'"a\\b"') == r'"a\\b"'
+    assert repair_json_escapes(r'"a\u00e9b"') == r'"a\u00e9b"'
+    assert repair_json_escapes(r'"a\/b"') == r'"a\/b"'
+
+
+def test_repair_does_not_corrupt_backslash_before_quote():
+    r"""`\\` 를 먼저 소비하지 않으면 정당한 백슬래시의 두 번째 문자가 다음 문자와
+    짝지어져 잘못 지워진다. 이 경우가 회귀하면 경로가 깨진다."""
+    from app.llm.bedrock import repair_json_escapes
+
+    raw = r'{"p": "C:\\dir", "q": "it\'s"}'
+    assert json.loads(repair_json_escapes(raw)) == {"p": "C:\\dir", "q": "it's"}
+
+
+async def test_lens_survives_apostrophe_escaped_frames(monkeypatch):
+    """렌즈도 같은 파서를 쓴다. 한국어 프레임이 영어 표현을 인용하면 이 경로를 밟는다."""
+    raw = (
+        '{"overview": "o", "clusters": [{"topic": "t", "summary": "s",'
+        r' "frames": {"bbc": "백악관이 \'Trump TV\' 피드를 운영했다", "guardian": "G"},'
+        ' "sources": {"bbc": [0], "guardian": [1]}}]}'
+    )
+
+    async def fake_converse(system, user):
+        return raw
+
+    monkeypatch.setattr(lens, "converse", fake_converse)
+    out = await lens.build_lens(target=_store({k: 3 for k in SOURCES}))
+    assert "Trump TV" in out["clusters"][0]["frames"]["bbc"]
+
+
+def test_parse_error_message_names_the_actual_cause():
+    """'객체를 찾지 못했다' 만 남기면 잘림·이스케이프·거절이 같은 메시지가 된다."""
+    with pytest.raises(LensError, match="마지막 오류"):
+        parse_json_object('{"clusters": [{"topic": "잘림')

@@ -1,7 +1,7 @@
 /* Newsroom Lens
  *
- * 색은 매체 자신에게서 가져온다. BBC 빨강, 가디언 파랑, NHK 청록, 연합뉴스 보라 —
- * 이 네 색이 상태 레일, 카드 머리, 렌즈 채널에서 같은 순서로 반복되는 것이 이 화면의
+ * 색은 매체 자신에게서 가져온다. BBC 빨강, 가디언 파랑, NHK 청록, 연합뉴스 보라,
+ * 알자지라 금색 — 이 색들이 상태 레일, 카드 머리, 렌즈 채널에서 같은 순서로 반복되는 것이 이 화면의
  * 유일한 장식이다. UI 자체는 잉크 한 색으로만 말한다.
  *
  * 가장 중요한 규칙: '미보도' 는 흐린 글씨가 아니라 '비어 있는 채널' 이다. 보도한 매체와
@@ -13,6 +13,15 @@
   --guardian: #0b4fa8;
   --nhk: #00857d;
   --yna: #7a3fbf;
+  --aljazeera: #b8860b;
+
+  /* CSS 에 색이 정의되지 않은 새 소스를 위한 순환 팔레트. 소스를 추가해도
+     '색 없는 채널' 이 생기지 않는다. */
+  --fallback-0: #d12b3e; --fallback-1: #0b4fa8; --fallback-2: #00857d;
+  --fallback-3: #7a3fbf; --fallback-4: #b8860b; --fallback-5: #c2410c;
+
+  /* 매체 수. app.js 가 /api/articles 응답을 보고 덮어쓴다. */
+  --cols: 4;
 
   --paper: #f2f0f5;
   --surface: #ffffff;
@@ -25,6 +34,7 @@
   --void: #e3dfeb;      /* 비어 있는 채널의 바탕 */
   --live: #147d4a;
   --dead: #b42318;
+  --warn: #b45309;
 
   --r-sm: 3px;
   --r-md: 6px;
@@ -46,11 +56,16 @@
   --void: #212036;
   --live: #4ade80;
   --dead: #fda4a4;
+  --warn: #fbbf24;
 
   --bbc: #ff6274;
   --guardian: #6ea8ff;
   --nhk: #2fc7bc;
   --yna: #b98bff;
+  --aljazeera: #e0b34a;
+
+  --fallback-0: #ff6274; --fallback-1: #6ea8ff; --fallback-2: #2fc7bc;
+  --fallback-3: #b98bff; --fallback-4: #e0b34a; --fallback-5: #fb923c;
 }
 
 * { box-sizing: border-box; }
@@ -104,13 +119,10 @@ a { color: inherit; }
   letter-spacing: -0.035em;
 }
 
-/* 네 개의 트랙. 이 모티프가 화면 전체의 뼈대다. */
+/* 매체별 트랙. 이 모티프가 화면 전체의 뼈대다. 색은 소스 수가 가변이라
+   app.js 가 인라인으로 넣는다 — 여기서 매체별 선택자를 쓰지 않는다. */
 .tracks { display: flex; gap: 3px; margin-top: 0.5rem; }
 .tracks i { display: block; height: 4px; width: 26px; border-radius: 1px; }
-.tracks i[data-src="bbc"]      { background: var(--bbc); }
-.tracks i[data-src="guardian"] { background: var(--guardian); }
-.tracks i[data-src="nhk"]      { background: var(--nhk); }
-.tracks i[data-src="yna"]      { background: var(--yna); }
 
 .tagline { margin-top: 0.55rem; color: var(--muted); font-size: 0.875rem; }
 
@@ -175,7 +187,7 @@ a { color: inherit; }
 
 .rail-list {
   list-style: none; margin: 0; padding: 0;
-  display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px;
+  display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 1px;
   background: var(--rule);
   border: 1px solid var(--rule);
   border-radius: var(--r-md);
@@ -223,7 +235,7 @@ main {
 .empty strong { color: var(--ink); }
 
 /* 뉴스룸 그리드: 데스크톱 4열 → 모바일 2열 */
-.grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--r-md); }
+.grid { display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: var(--r-md); }
 .grid:has(.empty) { display: block; background: none; border: 0; }
 
 .column { background: var(--surface); min-width: 0; }
@@ -328,7 +340,7 @@ main {
 
 /* 네 개의 채널. 보도한 매체와 침묵한 매체가 같은 폭을 갖는 것이 핵심이다. */
 .channels {
-  display: grid; grid-template-columns: repeat(4, 1fr);
+  display: grid; grid-template-columns: repeat(var(--cols), 1fr);
   gap: 1px; background: var(--rule);
 }
 
@@ -398,6 +410,13 @@ main {
 
 /* ── 반응형 ───────────────────────────────────────────────────────────── */
 
+/* 소스가 5곳 이상이면 좁은 데스크톱에서 열이 눌린다. 3열로 접는다. */
+@media (max-width: 1150px) {
+  .rail-list { grid-template-columns: repeat(3, 1fr); }
+  .grid { grid-template-columns: repeat(3, 1fr); }
+  .channels { grid-template-columns: repeat(3, 1fr); }
+}
+
 @media (max-width: 900px) {
   .rail-list { grid-template-columns: repeat(2, 1fr); }
   .grid { grid-template-columns: repeat(2, 1fr); }
@@ -410,3 +429,125 @@ main {
   .masthead-controls { width: 100%; justify-content: space-between; }
   .channel-void { min-height: 44px; }
 }
+
+/* ── 오프라인 안내 ────────────────────────────────────────────────────── */
+
+.offline {
+  max-width: var(--col);
+  margin: 0 auto 0.9rem;
+  padding: 0.7rem 1rem;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule-strong);
+  border-left: 3px solid var(--dead);
+  border-radius: 0 var(--r-md) var(--r-md) 0;
+  font-size: 0.83rem;
+  color: var(--ink-soft);
+}
+.offline strong { color: var(--ink); }
+
+/* ── 키워드 추적 ──────────────────────────────────────────────────────── */
+
+.keywords {
+  max-width: var(--col);
+  margin: 1.4rem auto 0;
+  padding: 0 1.25rem;
+}
+
+#kw-form { display: flex; gap: 0.5rem; align-items: center; flex-wrap: wrap; }
+
+.kw-label { font-size: 0.8rem; font-weight: 700; color: var(--ink-soft); flex: none; }
+
+#kw-input {
+  font: inherit;
+  flex: 1 1 22rem;
+  min-width: 0;
+  padding: 0.45rem 0.7rem;
+  background: var(--surface);
+  color: var(--ink);
+  border: 1px solid var(--rule-strong);
+  border-radius: var(--r-md);
+}
+#kw-input::placeholder { color: var(--muted); }
+
+.kw-list { list-style: none; display: flex; flex-wrap: wrap; gap: 5px; margin: 0.6rem 0 0; padding: 0; }
+.kw-chip {
+  font: inherit; cursor: pointer;
+  font-size: 0.78rem; font-weight: 700;
+  background: var(--ink); color: var(--paper);
+  border: 1px solid var(--ink);
+  border-radius: var(--r-sm);
+  padding: 0.12rem 0.45rem;
+}
+/* 해제 가능함을 알려야 한다 — 칩이 버튼인지 라벨인지 구분되지 않으면 안 누른다. */
+.kw-chip::after { content: ' ×'; opacity: 0.6; }
+.kw-chip:hover { background: var(--dead); border-color: var(--dead); }
+
+.kw-help {
+  display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap;
+  margin-top: 0.55rem; font-size: 0.8rem; color: var(--muted);
+}
+.switch { display: inline-flex; gap: 0.35rem; align-items: center; cursor: pointer; }
+.switch input:disabled + span { opacity: 0.5; cursor: not-allowed; }
+
+/* 강조는 밑줄 배경으로. 형광펜처럼 덮으면 원문 제목이 읽기 어려워진다. */
+mark {
+  background: linear-gradient(transparent 62%, var(--hl) 62%);
+  color: inherit;
+  border-radius: 1px;
+  --hl: #ffe066;
+}
+[data-theme="dark"] mark { --hl: #6b5a12; }
+
+.card.hit { background: color-mix(in srgb, var(--surface) 92%, var(--edge)); }
+.col-none { padding: 0.7rem 0.85rem; color: var(--muted); font-size: 0.8rem; }
+
+/* ── 렌즈 동작 버튼 ───────────────────────────────────────────────────── */
+
+.lens-actions { display: flex; gap: 0.6rem; align-items: center; flex-wrap: wrap; }
+.cluster-actions { margin-top: 0.7rem; }
+.linkbtn.copy { font-size: 0.79rem; font-weight: 600; }
+
+/* ── 논조 막대 ────────────────────────────────────────────────────────── */
+
+.tone { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.15rem; }
+
+.tone-track {
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--surface-sunk);
+  border: 1px solid var(--rule);
+  /* 중앙선. 막대가 어느 쪽으로 뻗었는지 기준이 보여야 한다. */
+  background-image: linear-gradient(var(--rule-strong), var(--rule-strong));
+  background-size: 1px 100%;
+  background-position: center;
+  background-repeat: no-repeat;
+}
+.tone-fill {
+  position: absolute; top: 0; bottom: 0;
+  border-radius: 2px;
+  background: var(--muted);
+}
+.tone-fill.zero { width: 0 !important; }
+
+.tone-label { font-size: 0.72rem; color: var(--muted); font-weight: 600; flex: none; }
+
+/* ── 제목 언어 ────────────────────────────────────────────────────────── */
+
+.langswitch button[aria-pressed="true"] { background: var(--ink); color: var(--paper); }
+.lang-note { border-left-color: var(--ink); }
+
+/* 번역을 볼 때 함께 남는 원문. 부제처럼 한 단계 낮춘다 — 지워 버리면
+   독자가 오역을 알아챌 방법이 없다. */
+.card-original {
+  margin-top: 0.25rem;
+  font-size: 0.78rem;
+  line-height: 1.4;
+  color: var(--muted);
+}
+
+/* 정체 상태 — 실패(빨강)와 정상(초록) 사이의 제3의 상태. */
+.rail-state.warn { color: var(--warn); }
+.col-stale { border-left-color: var(--warn); }

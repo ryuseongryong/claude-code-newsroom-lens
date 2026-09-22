@@ -121,9 +121,13 @@ export class NewsroomLensStack extends cdk.Stack {
     taskDef.addContainer('app', {
       image: ecs.ContainerImage.fromDockerImageAsset(image),
       portMappings: [{ containerPort: 8000, protocol: ecs.Protocol.TCP }],
+      // POLL_INTERVAL_SECONDS 를 여기에 두지 않는다. 한때 '120' 이 박혀 있었는데,
+      // app/config.py 의 기본값을 300 으로 올린 뒤에도 배포된 태스크는 계속 120 으로
+      // 돌았다 — 값이 두 곳에 있으면 한 곳만 고치고 고쳤다고 믿게 된다.
+      // 수집 주기의 단일 출처는 config.py 다. 인프라에서 덮어써야 할 일이 생기면
+      // 그때 명시적으로 추가한다.
       environment: {
         BEDROCK_REGION: this.region,
-        POLL_INTERVAL_SECONDS: '120',
         LOG_LEVEL: 'INFO',
       },
       // 기동 시점에 주입된다. 태스크 정의에는 시크릿 ARN 만 남는다.

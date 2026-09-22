@@ -16,15 +16,20 @@
 <header class="masthead">
   <div class="wordmark">
     <h1>Newsroom&nbsp;Lens</h1>
-    <!-- 네 개의 트랙. 이 모티프가 상태 레일과 렌즈 채널에서 계속 반복된다. -->
-    <span class="tracks" aria-hidden="true">
-      <i data-src="bbc"></i><i data-src="guardian"></i><i data-src="nhk"></i><i data-src="yna"></i>
-    </span>
-    <p class="tagline">같은 사건, 네 개의 프레임</p>
+    <!-- 매체별 트랙. 이 모티프가 상태 레일과 렌즈 채널에서 계속 반복된다.
+         소스 수에 맞춰 app.js 가 채운다. -->
+    <span class="tracks" id="tracks" aria-hidden="true"></span>
+    <p class="tagline" id="tagline">같은 사건, 여러 개의 프레임</p>
   </div>
 
   <div class="masthead-controls">
-    <div class="viewswitch" role="tablist" aria-label="보기 전환">
+    <!-- 제목 언어. 원문은 항상 함께 보인다 — 번역만 남으면 검증이 불가능하다. -->
+    <div class="viewswitch langswitch" role="group" aria-label="기사 제목 언어">
+      <button type="button" data-lang="original" aria-pressed="true">원문</button>
+      <button type="button" data-lang="ko" aria-pressed="false">한국어</button>
+      <button type="button" data-lang="en" aria-pressed="false">English</button>
+    </div>
+    <div class="viewswitch" id="viewswitch" role="tablist" aria-label="보기 전환">
       <button role="tab" id="tab-newsroom" aria-controls="view-newsroom" aria-selected="true" data-view="newsroom">뉴스룸</button>
       <button role="tab" id="tab-lens" aria-controls="view-lens" aria-selected="false" data-view="lens">렌즈</button>
     </div>
@@ -34,17 +39,39 @@
   </div>
 </header>
 
+<!-- 제목 번역 진행/실패 안내. -->
+<p class="offline lang-note" id="lang-note" hidden></p>
+
+<!-- 오프라인 안내. 서버에 닿지 못했을 때만 나타난다. -->
+<p class="offline" id="offline-note" hidden>
+  서버에 연결하지 못했습니다. 마지막으로 받은 기사를 보여줍니다 —
+  <strong>비교 분석</strong>은 연결이 돌아온 뒤에 실행할 수 있습니다.
+</p>
+
 <!-- 상태 레일: 매체별 수집 건수와 마지막 성공 시각. 죽은 피드는 여기서 먼저 보인다. -->
 <section class="rail" aria-label="매체 수집 상태">
-  <ol id="status-rail" class="rail-list">
-    <li class="rail-item is-loading" aria-hidden="true"></li>
-    <li class="rail-item is-loading" aria-hidden="true"></li>
-    <li class="rail-item is-loading" aria-hidden="true"></li>
-    <li class="rail-item is-loading" aria-hidden="true"></li>
-  </ol>
+  <ol id="status-rail" class="rail-list"></ol>
   <p class="rail-meta">
     <span id="poll-note">120초마다 수집</span>
     <button class="linkbtn" id="refresh">지금 새로 고침</button>
+  </p>
+</section>
+
+<!-- 키워드 추적: 고정한 낱말이 헤드라인·프레임에서 강조되고, 토글로 걸러낸다. -->
+<section class="keywords" aria-label="키워드 추적">
+  <form id="kw-form">
+    <label class="kw-label" for="kw-input">키워드 추적</label>
+    <input id="kw-input" type="text" autocomplete="off" placeholder="낱말을 넣고 Enter (예: 트럼프, typhoon)"
+           aria-describedby="kw-help">
+    <button class="iconbtn" type="submit">추가</button>
+  </form>
+  <ul class="kw-list" id="kw-list"></ul>
+  <p class="kw-help" id="kw-help">
+    <label class="switch">
+      <input type="checkbox" id="kw-filter">
+      <span>일치하는 기사만 보기</span>
+    </label>
+    <span id="kw-count"></span>
   </p>
 </section>
 
@@ -63,9 +90,12 @@
     <div class="lens-head">
       <div>
         <h2>관점 비교</h2>
-        <p class="lens-sub">네 매체의 최신 헤드라인을 묶고, 같은 사건을 서로 어떻게 달리 말했는지 봅니다.</p>
+        <p class="lens-sub" id="lens-sub">전 매체의 최신 헤드라인을 묶고, 같은 사건을 서로 어떻게 달리 말했는지 봅니다.</p>
       </div>
-      <button class="primary" id="run-lens">비교 분석 실행</button>
+      <div class="lens-actions">
+        <button class="iconbtn" id="copy-all" hidden>전체 브리프 복사</button>
+        <button class="primary" id="run-lens">비교 분석 실행</button>
+      </div>
     </div>
 
     <p class="lens-status" id="lens-status" hidden></p>

@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
+import time
 
 from ..config import FEEDS, FeedSpec, settings
 from ..store import ArticleStore, store
@@ -16,9 +18,16 @@ from .feeds import FeedError, fetch_feed, make_client
 
 log = logging.getLogger(__name__)
 
+# 마지막으로 '실제로' 수집한 시각. 자동 주기와 수동 새로 고침이 같이 쓴다 —
+# 자동 폴이 3초 전에 돌았다면 수동 새로 고침이 또 긁을 이유가 없다.
+# monotonic 을 쓴다: 시스템 시계가 조정되어도 간격 계산이 음수로 뒤집히지 않는다.
+_last_poll_at: float | None = None
+_manual_lock = asyncio.Lock()
+
 
 async def poll_once(target: ArticleStore = store) -> dict[str, int | str]:
     """전 매체 1회 수집. 매체별 결과 요약을 돌려준다(테스트·수동 트리거용)."""
+    global _last_poll_at
     results: dict[str, int | str] = {}
     async with make_client() as client:
         outcomes = await asyncio.gather(
@@ -27,7 +36,36 @@ async def poll_once(target: ArticleStore = store) -> dict[str, int | str]:
         )
     for spec, outcome in zip(FEEDS, outcomes):
         results[spec.key] = _apply(target, spec, outcome)
+    _last_poll_at = time.monotonic()
     return results
+
+
+def seconds_until_refresh_allowed() -> int:
+    """수동 새로 고침까지 남은 초. 0이면 지금 가능."""
+    if _last_poll_at is None:
+        return 0
+    remaining = settings.manual_refresh_min_seconds - (time.monotonic() - _last_poll_at)
+    return max(0, math.ceil(remaining))
+
+
+async def request_refresh(target: ArticleStore = store) -> dict[str, object]:
+    """'지금 새로 고침'. 최소 간격 안이면 긁지 않고 남은 시간을 알려준다.
+
+    거부를 오류로 취급하지 않는다 — 사용자는 아무것도 잘못하지 않았고, 화면에 이미
+    있는 기사가 최신이다. 그래서 200 으로 '안 긁었고 N초 뒤 가능' 이라고 말한다.
+    """
+    async with _manual_lock:
+        # 락을 기다리는 동안 다른 요청이 이미 긁었을 수 있다. 다시 확인한다.
+        wait = seconds_until_refresh_allowed()
+        if wait > 0:
+            return {"refreshed": False, "retry_after_seconds": wait}
+        log.info("수동 새로 고침 요청 — 즉시 수집")
+        results = await poll_once(target)
+        return {
+            "refreshed": True,
+            "results": {k: v for k, v in results.items()},
+            "retry_after_seconds": settings.manual_refresh_min_seconds,
+        }
 
 
 def _apply(target: ArticleStore, spec: FeedSpec, outcome: object) -> int | str:

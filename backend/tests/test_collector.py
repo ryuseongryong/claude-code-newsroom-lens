@@ -129,13 +129,15 @@ async def test_one_dead_feed_does_not_kill_the_others(monkeypatch):
     assert results["guardian"] == 2                 # 나머지는 건수
     assert results["nhk"] == 1
     assert results["yna"] == 2
+    # 소스를 추가해도 이 테스트가 조용히 통과하지 않도록: BBC 외에는 전부 성공이어야 한다.
+    assert [k for k, v in results.items() if isinstance(v, str)] == ["bbc"]
 
     by_key = {s.source: s for s in target.statuses()}
     assert by_key["bbc"].last_error is not None
     assert by_key["bbc"].healthy is False
     assert by_key["guardian"].last_error is None
     assert by_key["guardian"].healthy is True
-    assert target.total_count() == 5
+    assert target.total_count() == 2 * (len(FEEDS) - 2) + 1
 
 
 async def test_failure_keeps_previously_collected_articles(monkeypatch):
@@ -186,11 +188,153 @@ def test_latest_is_sorted_newest_first():
 
 
 def test_all_feed_urls_are_verified_and_unique():
-    assert len(FEEDS) == 4
-    assert len({f.url for f in FEEDS}) == 4
-    assert len({f.key for f in FEEDS}) == 4
+    assert len(FEEDS) >= 4
+    assert len({f.url for f in FEEDS}) == len(FEEDS)
+    assert len({f.key for f in FEEDS}) == len(FEEDS)
     for spec in FEEDS:
         assert spec.verified, f"{spec.key}: 검증 날짜가 비어 있다"
         assert spec.url.startswith("https://")
     # 한국어 소스가 정확히 하나여야 한다 (비교의 전제).
     assert [f.key for f in FEEDS if f.lang == "ko"] == ["yna"]
+
+
+# ── 정체 감지 (NHK 실측 사고) ─────────────────────────────────────────────────
+
+
+def test_frozen_index_is_not_reported_healthy():
+    """HTTP 200 + 기사 수백 건이어도 내용이 늙었으면 정상이 아니다.
+
+    실측 사고(2026-09-22): NHK 의 낡은 JSON 인덱스가 405건을 정상 응답으로 계속
+    내보내면서 2026-09-05 에 얼어붙어 있었다. 수집은 매번 성공했으므로 last_error 는
+    None 이었고, 화면은 17일 전 기사를 아무 경고 없이 보여줬다. 죽은 소스는 눈에
+    보이지만 얼어붙은 소스는 보이지 않는다 — 그래서 별도 상태가 필요하다.
+    """
+    from datetime import datetime, timedelta, timezone
+
+    from app.store.models import STALE_AFTER_HOURS, SourceStatus
+
+    old = (datetime.now(timezone.utc) - timedelta(days=17)).isoformat(timespec="seconds")
+    frozen = SourceStatus(
+        source="nhk", label="NHK", label_en="NHK", lang="en",
+        count=405, last_success="2026-09-22T05:00:00+00:00", newest_published=old,
+    )
+    assert frozen.last_error is None      # 수집은 성공했다
+    assert frozen.count > 0               # 기사도 많다
+    assert frozen.stale is True           # 그래도 정체다
+    assert frozen.healthy is False        # 정상으로 보고하지 않는다
+    assert frozen.stale_hours > STALE_AFTER_HOURS
+    assert frozen.to_dict()["stale"] is True
+
+
+def test_fresh_source_is_healthy_and_not_stale():
+    from datetime import datetime, timedelta, timezone
+
+    from app.store.models import SourceStatus
+
+    fresh = (datetime.now(timezone.utc) - timedelta(minutes=30)).isoformat(timespec="seconds")
+    ok = SourceStatus(
+        source="bbc", label="BBC", label_en="BBC", lang="en",
+        count=32, last_success="2026-09-22T05:00:00+00:00", newest_published=fresh,
+    )
+    assert ok.stale is False
+    assert ok.healthy is True
+
+
+def test_missing_newest_published_is_not_treated_as_stale():
+    """발행 시각을 모르는 것과 늙은 것은 다르다. 모를 때 경고를 띄우면 늑대소년이 된다."""
+    from app.store.models import SourceStatus
+
+    unknown = SourceStatus(source="x", label="X", label_en="X", lang="en", count=5)
+    assert unknown.stale_hours is None
+    assert unknown.stale is False
+    assert unknown.healthy is True
+
+
+def test_store_records_newest_article_time_not_fetch_time():
+    """newest_published 는 '매체가 쓴 시각' 이다. '우리가 가져온 시각' 과 구별되어야 한다."""
+    target = ArticleStore()
+    target.record_success("bbc", [
+        Article("bbc", "old", "https://x/1", "2026-09-01T00:00:00+00:00", "s"),
+        Article("bbc", "new", "https://x/2", "2026-09-22T04:00:00+00:00", "s"),
+    ])
+    status = {s.source: s for s in target.statuses()}["bbc"]
+    assert status.newest_published.startswith("2026-09-22T04:00")
+    assert status.last_success != status.newest_published
+
+
+# ── 수동 새로 고침 속도 제한 ──────────────────────────────────────────────────
+
+
+async def test_manual_refresh_is_rate_limited(monkeypatch):
+    """버튼을 연타해도 외부 피드로 요청이 쏟아지지 않아야 한다."""
+    from app.collector import poller
+
+    calls = 0
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        nonlocal calls
+        if "nhk.or.jp" in str(request.url):
+            return httpx.Response(200, json={"data": [
+                {"id": "20260922_1", "title": "N", "page_url": "/p/", "updated_at": "1788553140000"}]})
+        return httpx.Response(200, content=RSS_OK)
+
+    def counting_client():
+        nonlocal calls
+        calls += 1
+        return _client(handler)
+
+    monkeypatch.setattr(poller, "make_client", counting_client)
+    monkeypatch.setattr(poller.settings, "manual_refresh_min_seconds", 60)
+    monkeypatch.setattr(poller, "_last_poll_at", None)
+
+    target = ArticleStore()
+
+    first = await poller.request_refresh(target)
+    assert first["refreshed"] is True
+    assert calls == 1
+
+    # 즉시 다시 누른다 → 긁지 않고 남은 시간만 알려준다.
+    second = await poller.request_refresh(target)
+    assert second["refreshed"] is False
+    assert 0 < second["retry_after_seconds"] <= 60
+    assert calls == 1, "제한 중인데 피드를 다시 긁었다"
+
+    # 제한이 지나면 다시 긁는다.
+    monkeypatch.setattr(poller, "_last_poll_at", poller.time.monotonic() - 61)
+    third = await poller.request_refresh(target)
+    assert third["refreshed"] is True
+    assert calls == 2
+
+
+async def test_automatic_poll_also_arms_the_rate_limit(monkeypatch):
+    """자동 폴이 방금 돌았으면 수동 새로 고침이 또 긁을 이유가 없다."""
+    from app.collector import poller
+
+    monkeypatch.setattr(poller, "make_client", lambda: _client(
+        lambda r: httpx.Response(200, content=RSS_OK)))
+    monkeypatch.setattr(poller.settings, "manual_refresh_min_seconds", 60)
+    monkeypatch.setattr(poller, "_last_poll_at", None)
+
+    target = ArticleStore()
+    await poller.poll_once(target)                    # 자동 주기가 돌았다고 가정
+    assert poller.seconds_until_refresh_allowed() > 0
+    assert (await poller.request_refresh(target))["refreshed"] is False
+
+
+def test_refresh_allowed_before_any_poll():
+    """기동 직후에는 기다릴 이유가 없다."""
+    from app.collector import poller
+
+    saved = poller._last_poll_at
+    try:
+        poller._last_poll_at = None
+        assert poller.seconds_until_refresh_allowed() == 0
+    finally:
+        poller._last_poll_at = saved
+
+
+def test_default_poll_interval_is_five_minutes():
+    from app.config import Settings
+
+    assert Settings().poll_interval_seconds == 300
+    assert Settings().manual_refresh_min_seconds == 60

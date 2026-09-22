@@ -109,10 +109,12 @@ def _shape_cluster(item: Any, indexed: dict[str, list[Article]]) -> dict[str, An
 
     frames_raw = item.get("frames") if isinstance(item.get("frames"), dict) else {}
     sources_raw = item.get("sources") if isinstance(item.get("sources"), dict) else {}
+    tone_raw = item.get("tone") if isinstance(item.get("tone"), dict) else {}
 
     frames: dict[str, str] = {}
     sources: dict[str, list[int]] = {}
     evidence: dict[str, list[dict[str, Any]]] = {}
+    tone: dict[str, int] = {}
     covered: list[str] = []
 
     for spec in FEEDS:
@@ -122,17 +124,12 @@ def _shape_cluster(item: Any, indexed: dict[str, list[Article]]) -> dict[str, An
         frame = str(frames_raw.get(key) or "").strip()
 
         # 인용할 기사가 없으면 무슨 말을 했든 "미보도" 다. 근거 없는 프레임은 싣지 않는다.
-        if not indices:
+        # 프레임을 안 쓴 경우도 같다(인덱스만 주고 해석을 빠뜨린 것).
+        if not indices or not frame or frame == NO_COVERAGE:
             frames[key] = NO_COVERAGE
             sources[key] = []
             evidence[key] = []
-            continue
-
-        if not frame or frame == NO_COVERAGE:
-            # 인덱스는 줬는데 프레임을 안 썼다 — 인용만 남기고 프레임은 비운다.
-            frames[key] = NO_COVERAGE
-            sources[key] = []
-            evidence[key] = []
+            tone[key] = 0          # 미보도에는 논조가 없다
             continue
 
         frames[key] = frame
@@ -140,6 +137,7 @@ def _shape_cluster(item: Any, indexed: dict[str, list[Article]]) -> dict[str, An
         evidence[key] = [
             {"index": i, "title": available[i].title, "link": available[i].link} for i in indices
         ]
+        tone[key] = _clamp_tone(tone_raw.get(key))
         covered.append(key)
 
     if len(covered) < MIN_SOURCES_PER_CLUSTER:
@@ -156,9 +154,26 @@ def _shape_cluster(item: Any, indexed: dict[str, list[Article]]) -> dict[str, An
         "frames": frames,
         "sources": sources,
         "evidence": evidence,
+        "tone": tone,
         "covered": covered,
         "uncovered": [s.key for s in FEEDS if s.key not in covered],
     }
+
+
+def _clamp_tone(raw: Any) -> int:
+    """논조를 -2..+2 정수로 좁힌다.
+
+    프롬프트로 범위를 못박아도 모델은 3, -5, "중립", 1.5 를 보낸다. 화면의 막대는
+    이 값을 폭으로 쓰므로 범위를 벗어나면 레이아웃이 깨진다. 파싱 불가는 0(중립)이다 —
+    논조를 모른다는 것과 중립이라는 것은 다르지만, 둘 다 '막대 없음' 으로 보이면 된다.
+    """
+    if isinstance(raw, bool):
+        return 0
+    try:
+        value = int(round(float(raw)))
+    except (TypeError, ValueError):
+        return 0
+    return max(-2, min(2, value))
 
 
 def _valid_indices(raw: Any, bound: int) -> list[int]:

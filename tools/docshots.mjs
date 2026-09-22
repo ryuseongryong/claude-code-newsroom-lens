@@ -9,10 +9,18 @@ async function shoot(name, { theme, view, width = 1280 }) {
   const page = await ctx.newPage();
   await page.goto(base, { waitUntil: 'networkidle' });
   if (theme === 'dark') await page.evaluate(() => (document.documentElement.dataset.theme = 'dark'));
-  if (view === 'lens') {
+  if (view === 'bilingual') {
+    await page.click('[data-lang="ko"]');
+    await page.waitForFunction(() => document.querySelectorAll('.card-original').length > 0, null, { timeout: 240000 });
+    await page.waitForTimeout(800);
+    await page.evaluate(() => {
+      document.querySelectorAll('.col-body').forEach((ul) =>
+        [...ul.children].forEach((li, i) => { if (i >= 6) li.remove(); }));
+    });
+  } else if (view === 'lens') {
     await page.click('[data-view="lens"]');
     await page.click('#run-lens');
-    await page.waitForSelector('.cluster', { timeout: 150000 });
+    await page.waitForSelector('.cluster', { timeout: 300000 });
     await page.waitForTimeout(800);
     // 문서용으로는 첫 두 클러스터까지만 담는다.
     await page.evaluate(() => {
@@ -29,7 +37,8 @@ async function shoot(name, { theme, view, width = 1280 }) {
   console.log(`docs/img/${name}.png`);
   await ctx.close();
 }
-await shoot('lens', { theme: 'light', view: 'lens' });
-await shoot('newsroom', { theme: 'light', view: 'newsroom' });
-await shoot('lens-dark', { theme: 'dark', view: 'lens' });
+await shoot('lens', { theme: 'light', view: 'lens', width: 1500 });
+await shoot('newsroom', { theme: 'light', view: 'newsroom', width: 1500 });
+await shoot('bilingual', { theme: 'light', view: 'bilingual', width: 1500 });
+await shoot('lens-dark', { theme: 'dark', view: 'lens', width: 1500 });
 await browser.close();

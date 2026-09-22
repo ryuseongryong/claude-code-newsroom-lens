@@ -45,11 +45,18 @@ class ArticleStore:
             self._trim_locked(source)
             status = self._status.get(source)
             if status is not None:
-                status.count = len(self._articles[source])
+                bucket_now = self._articles[source]
+                status.count = len(bucket_now)
                 status.last_success = now
                 status.last_attempt = now
                 status.last_error = None
                 status.consecutive_failures = 0
+                # 가장 최신 '기사' 의 발행 시각을 따로 기록한다. 이게 없으면 얼어붙은
+                # 인덱스(HTTP 200 + 기사 수백 건)를 영원히 '정상' 으로 보고한다.
+                if bucket_now:
+                    status.newest_published = max(a.published_dt for a in bucket_now.values()).isoformat(
+                        timespec="seconds"
+                    )
             return max(0, len(self._articles[source]) - before)
 
     def record_failure(self, source: str, error: str) -> None:

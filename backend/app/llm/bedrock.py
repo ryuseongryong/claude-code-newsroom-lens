@@ -79,28 +79,59 @@ def parse_json_object(text: str) -> dict[str, Any]:
     """모델 출력에서 JSON 객체를 방어적으로 꺼낸다.
 
     프롬프트로 '펜스 금지' 를 못박아도 모델은 때때로 ```json 을 붙이고, 앞뒤에 한 줄
-    설명을 남긴다. 그때마다 502 를 내면 기능이 도박이 된다. 그래서 세 단계로 내려간다.
+    설명을 남긴다. 그때마다 502 를 내면 기능이 도박이 된다. 그래서 단계적으로 내려간다.
       1) 그대로 파싱
-      2) 코드펜스를 벗기고 파싱
-      3) 첫 '{' 부터 짝이 맞는 '}' 까지 잘라내서 파싱
+      2) 잘못된 이스케이프를 고쳐서 파싱   ← 실측으로 가장 흔한 실패 원인
+      3) 코드펜스를 벗기고 파싱
+      4) 첫 '{' 부터 짝이 맞는 '}' 까지 잘라내서 파싱 (+ 이스케이프 수리)
     """
-    candidates = [text, _FENCE_RE.sub("", text.strip())]
-    balanced = _extract_balanced_object(text)
-    if balanced:
-        candidates.append(balanced)
+    stripped = text.strip()
+    fenced = _FENCE_RE.sub("", stripped)
+    balanced = _extract_balanced_object(text) or ""
 
+    candidates = [
+        stripped,
+        repair_json_escapes(stripped),
+        fenced,
+        repair_json_escapes(fenced),
+        balanced,
+        repair_json_escapes(balanced),
+    ]
+
+    last_error: str | None = None
     for candidate in candidates:
         candidate = candidate.strip()
         if not candidate:
             continue
         try:
             parsed = json.loads(candidate)
-        except json.JSONDecodeError:
+        except json.JSONDecodeError as exc:
+            last_error = f"{exc.msg} (위치 {exc.pos})"
             continue
         if isinstance(parsed, dict):
             return parsed
 
-    raise LensError("모델 응답에서 JSON 객체를 찾지 못했습니다.")
+    # 원인을 뭉개지 않는다. '객체를 찾지 못했다' 만 남기면 잘림과 이스케이프 오류와
+    # 모델의 거절이 전부 같은 메시지가 되어 디버깅이 불가능해진다.
+    raise LensError(f"모델 응답에서 JSON 객체를 찾지 못했습니다 (마지막 오류: {last_error or '빈 응답'})")
+
+
+# 유효한 JSON 이스케이프는 이 여덟 개뿐이다: \" \\ \/ \b \f \n \r \t \uXXXX
+_BAD_ESCAPE_RE = re.compile(r'\\\\|\\(?P<bad>[^"\\/bfnrtu])')
+
+
+def repair_json_escapes(text: str) -> str:
+    r"""JSON 에 허용되지 않는 이스케이프를 지운다.
+
+    실측(2026-09-22): 모델이 한국어 제목 안의 아포스트로피를 자바스크립트 습관대로
+    `\'` 로 이스케이프한다 — 예) "전 \'암살단\' 지도자". JSON 표준에는 `\'` 가 없어서
+    json.loads 가 'Invalid \escape' 로 문서 **전체**를 거부한다. 제목 40개 묶음이
+    아포스트로피 하나 때문에 통째로 날아갔다.
+
+    `\\` 를 먼저 매칭해 통째로 넘기는 것이 핵심이다. 그러지 않으면 정규식이 정당한
+    `\\` 의 두 번째 백슬래시를 다음 문자와 짝지어 잘못 지운다 (`"a\\\\'b"` 가 깨진다).
+    """
+    return _BAD_ESCAPE_RE.sub(lambda m: m.group(0) if m.group("bad") is None else m.group("bad"), text)
 
 
 def _extract_balanced_object(text: str) -> str | None:
