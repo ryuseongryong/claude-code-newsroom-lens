@@ -1,0 +1,97 @@
+<!doctype html>
+<html lang="ko" data-theme="light">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Newsroom Lens — 같은 사건, 네 개의 프레임</title>
+<meta name="description" content="BBC · The Guardian · NHK World · 연합뉴스가 같은 세계를 어떻게 다르게 말하는지 비교합니다.">
+<link rel="preconnect" href="https://cdn.jsdelivr.net">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.min.css">
+<link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+
+<a class="skip" href="#main">본문으로 건너뛰기</a>
+
+<header class="masthead">
+  <div class="wordmark">
+    <h1>Newsroom&nbsp;Lens</h1>
+    <!-- 네 개의 트랙. 이 모티프가 상태 레일과 렌즈 채널에서 계속 반복된다. -->
+    <span class="tracks" aria-hidden="true">
+      <i data-src="bbc"></i><i data-src="guardian"></i><i data-src="nhk"></i><i data-src="yna"></i>
+    </span>
+    <p class="tagline">같은 사건, 네 개의 프레임</p>
+  </div>
+
+  <div class="masthead-controls">
+    <div class="viewswitch" role="tablist" aria-label="보기 전환">
+      <button role="tab" id="tab-newsroom" aria-controls="view-newsroom" aria-selected="true" data-view="newsroom">뉴스룸</button>
+      <button role="tab" id="tab-lens" aria-controls="view-lens" aria-selected="false" data-view="lens">렌즈</button>
+    </div>
+    <button class="iconbtn" id="theme-toggle" aria-live="polite">
+      <span id="theme-label">어두운 화면</span>
+    </button>
+  </div>
+</header>
+
+<!-- 상태 레일: 매체별 수집 건수와 마지막 성공 시각. 죽은 피드는 여기서 먼저 보인다. -->
+<section class="rail" aria-label="매체 수집 상태">
+  <ol id="status-rail" class="rail-list">
+    <li class="rail-item is-loading" aria-hidden="true"></li>
+    <li class="rail-item is-loading" aria-hidden="true"></li>
+    <li class="rail-item is-loading" aria-hidden="true"></li>
+    <li class="rail-item is-loading" aria-hidden="true"></li>
+  </ol>
+  <p class="rail-meta">
+    <span id="poll-note">120초마다 수집</span>
+    <button class="linkbtn" id="refresh">지금 새로 고침</button>
+  </p>
+</section>
+
+<main id="main">
+
+  <!-- ── 뉴스룸 ────────────────────────────────────────────────────────── -->
+  <section id="view-newsroom" role="tabpanel" aria-labelledby="tab-newsroom">
+    <div id="newsroom-grid" class="grid">
+      <p class="empty" id="newsroom-empty">첫 수집을 기다리고 있습니다. 잠시 후 헤드라인이 채워집니다.</p>
+    </div>
+  </section>
+
+  <!-- ── 렌즈 ──────────────────────────────────────────────────────────── -->
+  <section id="view-lens" role="tabpanel" aria-labelledby="tab-lens" hidden>
+
+    <div class="lens-head">
+      <div>
+        <h2>관점 비교</h2>
+        <p class="lens-sub">네 매체의 최신 헤드라인을 묶고, 같은 사건을 서로 어떻게 달리 말했는지 봅니다.</p>
+      </div>
+      <button class="primary" id="run-lens">비교 분석 실행</button>
+    </div>
+
+    <p class="lens-status" id="lens-status" hidden></p>
+
+    <div id="lens-overview" class="overview" hidden>
+      <h3>미디어 지형</h3>
+      <p id="overview-text"></p>
+      <p class="overview-meta" id="overview-meta"></p>
+    </div>
+
+    <div id="lens-clusters"></div>
+
+    <p class="empty" id="lens-empty">
+      아직 분석하지 않았습니다. <strong>비교 분석 실행</strong>을 누르면 매체별 프레임을 나란히 보여줍니다.
+    </p>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <p>
+    본문은 저장하지 않습니다. 제목·요약·링크만 보관하며 모든 카드는 원문으로 연결됩니다.
+    분석 문장은 <span id="foot-model">Claude</span>가 생성했습니다.
+  </p>
+</footer>
+
+<script src="./app.js"></script>
+</body>
+</html>
