@@ -250,6 +250,9 @@ ALB 설정    SG 인그레스 = pl-22a6434b 만 (IpRanges 0개)
 
 ## 구조
 
+도면 중심 문서는 [docs/architecture.md](docs/architecture.md) 에 있다
+(`.claude/skills/arch-viewer` 스킬로 생성).
+
 ```
 backend/app/
   config.py            피드 정의(+확인일) · 런타임 설정
