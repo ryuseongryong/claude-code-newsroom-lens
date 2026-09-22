@@ -31,7 +31,7 @@ class ArticleStore:
 
     # ── 쓰기 ──────────────────────────────────────────────────────────────
 
-    def record_success(self, source: str, articles: list[Article]) -> int:
+    def record_success(self, source: str, articles: list[Article], filtered_out: int = 0) -> int:
         """수집 성공. 새로 들어온 건수를 돌려준다.
 
         기사가 0건이어도 '성공'이다 — 피드가 조용한 것과 피드가 죽은 것은 다르다.
@@ -51,6 +51,7 @@ class ArticleStore:
                 status.last_attempt = now
                 status.last_error = None
                 status.consecutive_failures = 0
+                status.filtered_out = filtered_out
                 # 가장 최신 '기사' 의 발행 시각을 따로 기록한다. 이게 없으면 얼어붙은
                 # 인덱스(HTTP 200 + 기사 수백 건)를 영원히 '정상' 으로 보고한다.
                 if bucket_now:

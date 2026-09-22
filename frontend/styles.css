@@ -1,7 +1,7 @@
 /* Newsroom Lens
  *
- * 색은 매체 자신에게서 가져온다. BBC 빨강, 가디언 파랑, NHK 청록, 연합뉴스 보라,
- * 알자지라 금색 — 이 색들이 상태 레일, 카드 머리, 렌즈 채널에서 같은 순서로 반복되는 것이 이 화면의
+ * 해외지는 차가운 색, 국내지는 따뜻한 색으로 묶었다 — 색만 보고도 '국내 vs 해외'
+ * 가 읽히게. 이 색들이 상태 레일, 카드 머리, 렌즈 채널에서 같은 순서로 반복되는 것이 이 화면의
  * 유일한 장식이다. UI 자체는 잉크 한 색으로만 말한다.
  *
  * 가장 중요한 규칙: '미보도' 는 흐린 글씨가 아니라 '비어 있는 채널' 이다. 보도한 매체와
@@ -9,11 +9,13 @@
  */
 
 :root {
-  --bbc: #d12b3e;
-  --guardian: #0b4fa8;
-  --nhk: #00857d;
-  --yna: #7a3fbf;
-  --aljazeera: #b8860b;
+  /* 업계지 5곳의 식별색. 해외지는 차가운 쪽, 국내지는 따뜻한 쪽으로 묶어
+     '국내 vs 해외' 가 색만 보고도 읽히게 한다. */
+  --wwd: #1f2a5c;        /* WWD — 짙은 남색 */
+  --pbn: #0e7490;        /* Premium Beauty News — 청록 */
+  --jangup: #b91c5c;     /* 장업신문 — 자주 */
+  --cosmorning: #c2410c; /* 코스모닝 — 주황 */
+  --cosin: #a16207;      /* 코스인코리아 — 황토 */
 
   /* CSS 에 색이 정의되지 않은 새 소스를 위한 순환 팔레트. 소스를 추가해도
      '색 없는 채널' 이 생기지 않는다. */
@@ -58,11 +60,11 @@
   --dead: #fda4a4;
   --warn: #fbbf24;
 
-  --bbc: #ff6274;
-  --guardian: #6ea8ff;
-  --nhk: #2fc7bc;
-  --yna: #b98bff;
-  --aljazeera: #e0b34a;
+  --wwd: #93a4e8;
+  --pbn: #3ec5d8;
+  --jangup: #ff7aa8;
+  --cosmorning: #fb923c;
+  --cosin: #e0b34a;
 
   --fallback-0: #ff6274; --fallback-1: #6ea8ff; --fallback-2: #2fc7bc;
   --fallback-3: #b98bff; --fallback-4: #e0b34a; --fallback-5: #fb923c;

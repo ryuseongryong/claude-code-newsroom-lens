@@ -122,7 +122,7 @@ function titleFor(article) {
   const wanted = pair?.[titleLang];
   // 번역이 아직 없으면 원문을 그대로 쓴다. 빈 제목이나 '번역 중' 을 띄우지 않는다.
   if (!wanted) return { main: original, sub: '' };
-  // 이미 그 언어인 기사(연합뉴스 + 한국어)는 원문을 두 번 보여줄 이유가 없다.
+  // 이미 그 언어인 기사(국내지 + 한국어 보기)는 원문을 두 번 보여줄 이유가 없다.
   if (wanted.trim() === original.trim()) return { main: original, sub: '' };
   return { main: wanted, sub: original };
 }
@@ -319,9 +319,9 @@ function applySourceIdentity(list) {
     return i;
   }));
 
-  $('#tagline').textContent = `같은 사건, ${list.length}개의 프레임`;
+  $('#tagline').textContent = `화장품 업계지 ${list.length}곳 — 같은 사안, 다른 프레임`;
   $('#lens-sub').textContent =
-    `${list.length}개 매체의 최신 헤드라인을 묶고, 같은 사건을 서로 어떻게 달리 말했는지 봅니다.`;
+    `업계지 ${list.length}곳의 최신 헤드라인을 묶고, 같은 사안을 서로 어떻게 달리 말했는지 봅니다.`;
 }
 
 function sourceMeta(key) {
@@ -358,6 +358,7 @@ function renderRail(list) {
     let mood = 'live', word = '정상';
     if (s.last_error) { mood = 'dead'; word = s.last_error; }
     else if (s.stale) { mood = 'warn'; word = `정체 — 최신 기사 ${relativeTime(s.newest_published)}`; }
+    else if (s.filtered_out) { word = `정상 · 주제 밖 ${s.filtered_out}건 제외`; }
     state.className = `rail-state ${mood}`;
     const dot = document.createElement('span');
     dot.className = 'dot';

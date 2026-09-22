@@ -1,4 +1,4 @@
-"""저장 스키마 — 4개 매체가 하나의 모양으로 합쳐지는 지점.
+"""저장 스키마 — 여러 매체가 하나의 모양으로 합쳐지는 지점.
 
 기사 본문은 저장하지 않는다. 제목·링크·요약(300자)만 들고 원문으로 링크한다.
 """
@@ -53,6 +53,9 @@ class SourceStatus:
     # 이 매체가 가진 가장 최신 '기사' 의 발행 시각. last_success 와 다르다 —
     # last_success 는 '우리가 가져온 시각' 이고 이건 '매체가 쓴 시각' 이다.
     newest_published: str | None = None
+    # 마지막 수집에서 주제 필터가 덜어낸 건수. 0건 화면의 원인을 구별하기 위해 남긴다 —
+    # 피드가 조용한 것과 필터가 다 먹은 것은 다른 사건이다.
+    filtered_out: int = 0
 
     @property
     def stale_hours(self) -> float | None:

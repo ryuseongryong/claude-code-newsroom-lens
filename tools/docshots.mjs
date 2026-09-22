@@ -1,5 +1,5 @@
 import { chromium } from 'playwright-core';
-const base = 'https://df4knlft34smf.cloudfront.net';
+const base = process.env.SHOT_BASE ?? 'https://df4knlft34smf.cloudfront.net';
 const browser = await chromium.launch();
 async function shoot(name, { theme, view, width = 1280 }) {
   const ctx = await browser.newContext({

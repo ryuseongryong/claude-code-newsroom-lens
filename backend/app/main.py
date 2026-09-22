@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(
     title="Newsroom Lens",
-    description="BBC · The Guardian · NHK World · 연합뉴스 — 같은 사건, 네 개의 프레임",
+    description="화장품·뷰티 업계지 관점 비교 — 같은 사안, 여러 개의 프레임",
     version="0.1.0",
     lifespan=lifespan,
 )

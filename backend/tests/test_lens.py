@@ -13,6 +13,9 @@ from app.store import ArticleStore
 from app.store.models import Article
 
 SOURCES = tuple(s.key for s in FEEDS)
+# 테스트는 특정 매체 이름에 의존하지 않는다. 주제를 바꿔 소스를 전부 교체해도
+# 계약 검증은 그대로 성립해야 한다.
+S1, S2, S3 = SOURCES[0], SOURCES[1], SOURCES[2]
 
 
 @pytest.fixture(autouse=True)
@@ -105,8 +108,8 @@ async def test_happy_path_shapes_frames_evidence_and_coverage(monkeypatch):
             "overview": "지형 3문장",
             "clusters": [
                 _cluster(
-                    frames={"bbc": "BBC 프레임", "guardian": "가디언 프레임", "nhk": "미보도", "yna": "미보도"},
-                    sources={"bbc": [0, 2], "guardian": [1], "nhk": [], "yna": []},
+                    frames={S1: "첫 매체 프레임", S2: "둘째 매체 프레임", S3: "미보도"},
+                    sources={S1: [0, 2], S2: [1], S3: []},
                 )
             ],
         }
@@ -114,18 +117,18 @@ async def test_happy_path_shapes_frames_evidence_and_coverage(monkeypatch):
     out = await _build(monkeypatch, reply)
 
     cluster = out["clusters"][0]
-    assert cluster["covered"] == ["bbc", "guardian"]
+    assert cluster["covered"] == [S1, S2]
     # 인용하지 않은 매체는 전부 미보도다. 소스를 추가해도 자동으로 따라와야 한다.
-    assert cluster["uncovered"] == [k for k in SOURCES if k not in ("bbc", "guardian")]
-    assert cluster["frames"]["nhk"] == "미보도"
+    assert cluster["uncovered"] == [k for k in SOURCES if k not in (S1, S2)]
+    assert cluster["frames"][S3] == "미보도"
     # 근거가 인덱스가 아니라 실제 링크까지 해석되어 나가야 한다.
-    assert [e["index"] for e in cluster["evidence"]["bbc"]] == [0, 2]
+    assert [e["index"] for e in cluster["evidence"][S1]] == [0, 2]
     # 인덱스 공간은 '프롬프트에 보여준 순서' = 최신순이다. 저장 순서가 아니다.
     # 이게 어긋나면 근거 칩이 다른 기사를 가리킨다 — 조용히 틀리는 최악의 버그다.
-    presented = out["inputs"]["bbc"]
-    assert [a["link"] for a in presented[:3]] == ["https://bbc/4", "https://bbc/3", "https://bbc/2"]
-    assert cluster["evidence"]["bbc"][0]["link"] == presented[0]["link"]
-    assert cluster["evidence"]["bbc"][1]["link"] == presented[2]["link"]
+    presented = out["inputs"][S1]
+    assert [a["link"] for a in presented[:3]] == [f"https://{S1}/4", f"https://{S1}/3", f"https://{S1}/2"]
+    assert cluster["evidence"][S1][0]["link"] == presented[0]["link"]
+    assert cluster["evidence"][S1][1]["link"] == presented[2]["link"]
     assert out["cached"] is False
     # 프런트가 칩을 링크로 되돌릴 색인이 전 매체에 대해 있어야 한다.
     assert set(out["inputs"]) == set(SOURCES)
@@ -137,8 +140,8 @@ async def test_single_media_cluster_is_dropped(monkeypatch):
         {
             "overview": "o",
             "clusters": [
-                _cluster(topic="혼자", frames={"bbc": "BBC 만"}, sources={"bbc": [0]}),
-                _cluster(topic="둘", frames={"bbc": "B", "yna": "Y"}, sources={"bbc": [1], "yna": [1]}),
+                _cluster(topic="혼자", frames={S1: "한 곳만"}, sources={S1: [0]}),
+                _cluster(topic="둘", frames={S1: "B", S2: "Y"}, sources={S1: [1], S2: [1]}),
             ],
         }
     )
@@ -153,19 +156,19 @@ async def test_out_of_range_index_is_discarded_and_media_becomes_uncovered(monke
             "overview": "o",
             "clusters": [
                 _cluster(
-                    frames={"bbc": "실재", "guardian": "환각", "yna": "실재"},
-                    # guardian 은 5건만 있는데 99를 인용했다.
-                    sources={"bbc": [0], "guardian": [99], "yna": [2]},
+                    frames={S1: "실재", S2: "환각", S3: "실재"},
+                    # S2 는 5건만 있는데 99를 인용했다.
+                    sources={S1: [0], S2: [99], S3: [2]},
                 )
             ],
         }
     )
     out = await _build(monkeypatch, reply)
     cluster = out["clusters"][0]
-    assert cluster["frames"]["guardian"] == "미보도"
-    assert cluster["sources"]["guardian"] == []
-    assert "guardian" in cluster["uncovered"]
-    assert cluster["covered"] == ["bbc", "yna"]
+    assert cluster["frames"][S2] == "미보도"
+    assert cluster["sources"][S2] == []
+    assert S2 in cluster["uncovered"]
+    assert cluster["covered"] == [S1, S3]
 
 
 async def test_frame_without_citation_is_downgraded(monkeypatch):
@@ -175,15 +178,15 @@ async def test_frame_without_citation_is_downgraded(monkeypatch):
             "overview": "o",
             "clusters": [
                 _cluster(
-                    frames={"bbc": "근거 있음", "guardian": "근거 없음", "nhk": "근거 있음"},
-                    sources={"bbc": [0], "guardian": [], "nhk": [0]},
+                    frames={S1: "근거 있음", S2: "근거 없음", S3: "근거 있음"},
+                    sources={S1: [0], S2: [], S3: [0]},
                 )
             ],
         }
     )
     out = await _build(monkeypatch, reply)
-    assert out["clusters"][0]["frames"]["guardian"] == "미보도"
-    assert out["clusters"][0]["covered"] == ["bbc", "nhk"]
+    assert out["clusters"][0]["frames"][S2] == "미보도"
+    assert out["clusters"][0]["covered"] == [S1, S3]
 
 
 async def test_duplicate_indices_are_deduped_preserving_order(monkeypatch):
@@ -192,14 +195,14 @@ async def test_duplicate_indices_are_deduped_preserving_order(monkeypatch):
             "overview": "o",
             "clusters": [
                 _cluster(
-                    frames={"bbc": "B", "yna": "Y"},
-                    sources={"bbc": [2, 0, 2, 0], "yna": [1]},
+                    frames={S1: "B", S2: "Y"},
+                    sources={S1: [2, 0, 2, 0], S2: [1]},
                 )
             ],
         }
     )
     out = await _build(monkeypatch, reply)
-    assert out["clusters"][0]["sources"]["bbc"] == [2, 0]
+    assert out["clusters"][0]["sources"][S1] == [2, 0]
 
 
 async def test_cluster_count_is_capped_at_five(monkeypatch):
@@ -207,7 +210,7 @@ async def test_cluster_count_is_capped_at_five(monkeypatch):
         {
             "overview": "o",
             "clusters": [
-                _cluster(topic=f"주제{i}", frames={"bbc": "B", "yna": "Y"}, sources={"bbc": [0], "yna": [0]})
+                _cluster(topic=f"주제{i}", frames={S1: "B", S2: "Y"}, sources={S1: [0], S2: [0]})
                 for i in range(9)
             ],
         }
@@ -218,7 +221,7 @@ async def test_cluster_count_is_capped_at_five(monkeypatch):
 
 async def test_raises_when_every_cluster_is_single_media(monkeypatch):
     reply = _model_reply(
-        {"overview": "o", "clusters": [_cluster(frames={"bbc": "B"}, sources={"bbc": [0]})]}
+        {"overview": "o", "clusters": [_cluster(frames={S1: "B"}, sources={S1: [0]})]}
     )
     with pytest.raises(LensError, match="매체가 함께 다룬 주제"):
         await _build(monkeypatch, reply)
@@ -240,7 +243,7 @@ async def test_refuses_to_call_bedrock_with_fewer_than_two_live_sources(monkeypa
 
     monkeypatch.setattr(lens, "converse", fake_converse)
     with pytest.raises(LensError, match="최소 2개 매체"):
-        await lens.build_lens(target=_store({"bbc": 3}))
+        await lens.build_lens(target=_store({S1: 3}))
     assert called is False
 
 
@@ -254,7 +257,7 @@ async def test_second_call_in_same_bucket_is_served_from_cache(monkeypatch):
         nonlocal calls
         calls += 1
         return _model_reply(
-            {"overview": "o", "clusters": [_cluster(frames={"bbc": "B", "yna": "Y"}, sources={"bbc": [0], "yna": [0]})]}
+            {"overview": "o", "clusters": [_cluster(frames={S1: "B", S2: "Y"}, sources={S1: [0], S2: [0]})]}
         )
 
     monkeypatch.setattr(lens, "converse", fake_converse)
@@ -287,15 +290,15 @@ async def test_tone_is_passed_through_for_covered_media(monkeypatch):
             "overview": "o",
             "clusters": [
                 {
-                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
-                    "tone": {"bbc": 0, "guardian": -2},
+                    **_cluster(frames={S1: "B", S2: "G"}, sources={S1: [0], S2: [1]}),
+                    "tone": {S1: 0, S2: -2},
                 }
             ],
         }
     )
     out = await _build(monkeypatch, reply)
-    assert out["clusters"][0]["tone"]["bbc"] == 0
-    assert out["clusters"][0]["tone"]["guardian"] == -2
+    assert out["clusters"][0]["tone"][S1] == 0
+    assert out["clusters"][0]["tone"][S2] == -2
 
 
 async def test_tone_out_of_range_is_clamped_not_rejected(monkeypatch):
@@ -305,14 +308,14 @@ async def test_tone_out_of_range_is_clamped_not_rejected(monkeypatch):
             "overview": "o",
             "clusters": [
                 {
-                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
-                    "tone": {"bbc": 99, "guardian": -99},
+                    **_cluster(frames={S1: "B", S2: "G"}, sources={S1: [0], S2: [1]}),
+                    "tone": {S1: 99, S2: -99},
                 }
             ],
         }
     )
     out = await _build(monkeypatch, reply)
-    assert out["clusters"][0]["tone"] == {**out["clusters"][0]["tone"], "bbc": 2, "guardian": -2}
+    assert out["clusters"][0]["tone"] == {**out["clusters"][0]["tone"], S1: 2, S2: -2}
 
 
 async def test_unparseable_tone_falls_back_to_neutral(monkeypatch):
@@ -321,16 +324,16 @@ async def test_unparseable_tone_falls_back_to_neutral(monkeypatch):
             "overview": "o",
             "clusters": [
                 {
-                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
+                    **_cluster(frames={S1: "B", S2: "G"}, sources={S1: [0], S2: [1]}),
                     # 모델은 실제로 이런 값들을 보낸다.
-                    "tone": {"bbc": "중립", "guardian": 1.6},
+                    "tone": {S1: "중립", S2: 1.6},
                 }
             ],
         }
     )
     out = await _build(monkeypatch, reply)
-    assert out["clusters"][0]["tone"]["bbc"] == 0      # 문자열 → 0
-    assert out["clusters"][0]["tone"]["guardian"] == 2  # 1.6 → round → 2
+    assert out["clusters"][0]["tone"][S1] == 0      # 문자열 → 0
+    assert out["clusters"][0]["tone"][S2] == 2  # 1.6 → round → 2
 
 
 async def test_uncovered_media_tone_is_zero(monkeypatch):
@@ -339,15 +342,15 @@ async def test_uncovered_media_tone_is_zero(monkeypatch):
             "overview": "o",
             "clusters": [
                 {
-                    **_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]}),
-                    "tone": {"bbc": 1, "guardian": 1, "nhk": -2},   # nhk 는 미보도인데 논조를 줬다
+                    **_cluster(frames={S1: "B", S2: "G"}, sources={S1: [0], S2: [1]}),
+                    "tone": {S1: 1, S2: 1, S3: -2},   # nhk 는 미보도인데 논조를 줬다
                 }
             ],
         }
     )
     out = await _build(monkeypatch, reply)
-    assert out["clusters"][0]["tone"]["nhk"] == 0
-    assert "nhk" in out["clusters"][0]["uncovered"]
+    assert out["clusters"][0]["tone"][S3] == 0
+    assert S3 in out["clusters"][0]["uncovered"]
 
 
 async def test_every_source_appears_in_frames_tone_and_sources(monkeypatch):
@@ -355,7 +358,7 @@ async def test_every_source_appears_in_frames_tone_and_sources(monkeypatch):
     reply = _model_reply(
         {
             "overview": "o",
-            "clusters": [_cluster(frames={"bbc": "B", "guardian": "G"}, sources={"bbc": [0], "guardian": [1]})],
+            "clusters": [_cluster(frames={S1: "B", S2: "G"}, sources={S1: [0], S2: [1]})],
         }
     )
     out = await _build(monkeypatch, reply)
@@ -371,7 +374,7 @@ def test_prompt_enumerates_every_configured_source():
     for spec in FEEDS:
         assert f'"{spec.key}"' in SYSTEM_PROMPT, spec.key
         assert spec.label in SYSTEM_PROMPT, spec.label
-    assert f"{len(FEEDS)}개 국제 뉴스 매체" in SYSTEM_PROMPT
+    assert f"{len(FEEDS)}개 화장품·뷰티 업계 전문지" in SYSTEM_PROMPT
 
 
 # ── 잘못된 이스케이프 수리 (실측 버그) ───────────────────────────────────────
@@ -412,18 +415,22 @@ def test_repair_does_not_corrupt_backslash_before_quote():
 
 async def test_lens_survives_apostrophe_escaped_frames(monkeypatch):
     """렌즈도 같은 파서를 쓴다. 한국어 프레임이 영어 표현을 인용하면 이 경로를 밟는다."""
+    # 모델이 아포스트로피를 역슬래시로 이스케이프한 '깨진 JSON' 을 그대로 흉내낸다.
+    # 바깥을 큰따옴표로 감싸야 본문의 \' 가 온전히 남는다.
+    # 키 이름은 실제 소스 키여야 하므로 % 로 끼운다.
     raw = (
         '{"overview": "o", "clusters": [{"topic": "t", "summary": "s",'
-        r' "frames": {"bbc": "백악관이 \'Trump TV\' 피드를 운영했다", "guardian": "G"},'
-        ' "sources": {"bbc": [0], "guardian": [1]}}]}'
-    )
+        " \"frames\": {\"%s\": \"\\'Trump TV\\' 피드를 운영했다\", \"%s\": \"G\"},"
+        ' "sources": {"%s": [0], "%s": [1]}}]}'
+    ) % (S1, S2, S1, S2)
+    assert r"\'" in raw, "테스트가 검증하려는 잘못된 이스케이프가 실제로 들어 있어야 한다"
 
     async def fake_converse(system, user):
         return raw
 
     monkeypatch.setattr(lens, "converse", fake_converse)
     out = await lens.build_lens(target=_store({k: 3 for k in SOURCES}))
-    assert "Trump TV" in out["clusters"][0]["frames"]["bbc"]
+    assert "Trump TV" in out["clusters"][0]["frames"][S1]
 
 
 def test_parse_error_message_names_the_actual_cause():

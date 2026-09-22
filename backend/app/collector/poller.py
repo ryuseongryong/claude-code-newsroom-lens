@@ -1,6 +1,6 @@
-"""폴러 — 120초마다 4개 매체를 동시에 긁는다.
+"""폴러 — 설정된 주기(기본 5분)마다 전 매체를 동시에 긁는다.
 
-격리 규칙: 한 피드가 죽어도 나머지 셋은 갱신된다. 그래서 gather 에
+격리 규칙: 한 피드가 죽어도 나머지는 갱신된다. 그래서 gather 에
 `return_exceptions=True` 를 주고, 예외를 매체별 상태로 기록만 한다. 루프 자체는
 어떤 경우에도 빠져나오지 않는다 — 루프가 죽으면 화면이 조용히 늙는다.
 """
@@ -75,9 +75,13 @@ def _apply(target: ArticleStore, spec: FeedSpec, outcome: object) -> int | str:
         target.record_failure(spec.key, reason)
         log.warning("수집 실패 [%s] %s", spec.key, reason)
         return reason
-    articles = list(outcome)  # type: ignore[arg-type]
-    added = target.record_success(spec.key, articles)
-    log.info("수집 성공 [%s] %d건 수신 / 신규 %d건", spec.key, len(articles), added)
+    articles, filtered_out = outcome  # type: ignore[misc]
+    added = target.record_success(spec.key, list(articles), filtered_out=filtered_out)
+    log.info(
+        "수집 성공 [%s] %d건 보관 / 신규 %d건%s",
+        spec.key, len(articles), added,
+        f" / 주제 밖 {filtered_out}건 제외" if filtered_out else "",
+    )
     return added
 
 

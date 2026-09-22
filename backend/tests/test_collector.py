@@ -8,9 +8,24 @@ import pytest
 from app.collector.feeds import FeedError, fetch_feed
 from app.collector.normalize import clamp_summary, normalize_nhk_item, strip_html
 from app.collector.poller import poll_once
-from app.config import FEEDS, FEEDS_BY_KEY
+from app.config import FEEDS, FEEDS_BY_KEY, FeedSpec
 from app.store import ArticleStore
 from app.store.models import Article
+
+# JSON 어댑터 전용 스펙. 현재 FEEDS 는 전부 RSS 라서 실제 피드에서 가져올 수 없다.
+# 어댑터 자체는 유지한다 — NHK 가 RSS 를 내리고 JSON 으로 옮긴 전례가 있어서
+# 다음 소스가 같은 길을 갈 때 다시 만들지 않아도 되게 둔다.
+JSON_SPEC = FeedSpec(
+    key="jsonsrc", label="JSON 소스", label_en="JSON Source", lang="en",
+    url="https://example.com/news.json", kind="nhk_json", verified="2026-09-22",
+)
+
+# 타임존 표기 없는 KST 를 보내는 국내 업계지 스펙(보정 검증용)
+KST_SPEC = FeedSpec(
+    key="kstsrc", label="국내지", label_en="KST Source", lang="ko",
+    url="https://example.com/rss", kind="rss", verified="2026-09-22",
+    assume_tz_offset_hours=9.0,
+)
 
 RSS_OK = b"""<?xml version="1.0"?><rss version="2.0"><channel>
 <item><title>Headline &amp; Co</title><link>https://example.com/a</link>
@@ -44,7 +59,7 @@ def test_clamp_summary_cuts_at_limit():
 
 def test_nhk_item_link_is_absolute_and_epoch_ms_parsed():
     art = normalize_nhk_item(
-        FEEDS_BY_KEY["nhk"],
+        JSON_SPEC,
         {
             "id": "20260905_100",
             "title": "Title",
@@ -60,7 +75,7 @@ def test_nhk_item_link_is_absolute_and_epoch_ms_parsed():
 
 def test_nhk_item_falls_back_to_id_date_when_timestamps_empty():
     art = normalize_nhk_item(
-        FEEDS_BY_KEY["nhk"],
+        JSON_SPEC,
         {"id": "20260905_100", "title": "T", "page_url": "/x/", "updated_at": "", "public_at": ""},
     )
     assert art is not None
@@ -70,8 +85,8 @@ def test_nhk_item_falls_back_to_id_date_when_timestamps_empty():
 def test_entry_without_link_is_dropped():
     from app.collector.normalize import normalize_rss_entry
 
-    assert normalize_rss_entry(FEEDS_BY_KEY["bbc"], {"title": "T", "link": ""}) is None
-    assert normalize_rss_entry(FEEDS_BY_KEY["bbc"], {"title": "", "link": "https://x"}) is None
+    assert normalize_rss_entry(FEEDS[0], {"title": "T", "link": ""}) is None
+    assert normalize_rss_entry(FEEDS[0], {"title": "", "link": "https://x"}) is None
 
 
 # ── 가져오기 ──────────────────────────────────────────────────────────────────
@@ -79,7 +94,8 @@ def test_entry_without_link_is_dropped():
 
 async def test_fetch_rss_normalizes_entries():
     async with _client(lambda r: httpx.Response(200, content=RSS_OK)) as client:
-        articles = await fetch_feed(client, FEEDS_BY_KEY["bbc"])
+        articles, filtered = await fetch_feed(client, FEEDS[0])
+    assert filtered == 0
     assert [a.title for a in articles] == ["Headline & Co", "Second"]
     assert articles[0].summary == "Body text"
     assert articles[0].published == "2026-09-22T04:00:00+00:00"
@@ -88,36 +104,32 @@ async def test_fetch_rss_normalizes_entries():
 async def test_fetch_raises_feederror_on_http_500():
     async with _client(lambda r: httpx.Response(500)) as client:
         with pytest.raises(FeedError, match="HTTP 500"):
-            await fetch_feed(client, FEEDS_BY_KEY["bbc"])
+            await fetch_feed(client, FEEDS[0])
 
 
 async def test_fetch_raises_feederror_on_empty_feed():
     empty = b'<?xml version="1.0"?><rss version="2.0"><channel></channel></rss>'
     async with _client(lambda r: httpx.Response(200, content=empty)) as client:
         with pytest.raises(FeedError, match="0건"):
-            await fetch_feed(client, FEEDS_BY_KEY["bbc"])
+            await fetch_feed(client, FEEDS[0])
 
 
-async def test_fetch_raises_feederror_on_malformed_nhk_json():
+async def test_fetch_raises_feederror_on_malformed_json():
     async with _client(lambda r: httpx.Response(200, text="not json")) as client:
         with pytest.raises(FeedError):
-            await fetch_feed(client, FEEDS_BY_KEY["nhk"])
+            await fetch_feed(client, JSON_SPEC)
 
 
 # ── 격리 (Phase 1 DoD) ────────────────────────────────────────────────────────
 
 
 async def test_one_dead_feed_does_not_kill_the_others(monkeypatch):
-    """BBC 만 죽었을 때 나머지 셋은 정상 수집되어야 한다."""
+    """한 곳이 죽어도 나머지는 정상 수집되어야 한다 (Phase 1 DoD)."""
+    dead, *alive = [f.key for f in FEEDS]
 
     def handler(request: httpx.Request) -> httpx.Response:
-        if "bbci.co.uk" in str(request.url):
+        if str(request.url) == FEEDS_BY_KEY[dead].url:
             raise httpx.ConnectError("boom", request=request)
-        if "nhk.or.jp" in str(request.url):
-            return httpx.Response(
-                200,
-                json={"data": [{"id": "20260922_1", "title": "N", "page_url": "/p/", "updated_at": "1788553140000"}]},
-            )
         return httpx.Response(200, content=RSS_OK)
 
     monkeypatch.setattr("app.collector.poller.make_client", lambda: _client(handler))
@@ -125,56 +137,56 @@ async def test_one_dead_feed_does_not_kill_the_others(monkeypatch):
     target = ArticleStore()
     results = await poll_once(target)
 
-    assert isinstance(results["bbc"], str)          # 실패는 이유 문자열
-    assert results["guardian"] == 2                 # 나머지는 건수
-    assert results["nhk"] == 1
-    assert results["yna"] == 2
-    # 소스를 추가해도 이 테스트가 조용히 통과하지 않도록: BBC 외에는 전부 성공이어야 한다.
-    assert [k for k, v in results.items() if isinstance(v, str)] == ["bbc"]
+    assert isinstance(results[dead], str)           # 실패는 이유 문자열
+    # 소스를 바꿔도 이 테스트가 조용히 통과하지 않도록: 죽인 곳 외에는 전부 성공.
+    assert [k for k, v in results.items() if isinstance(v, str)] == [dead]
+    for key in alive:
+        assert isinstance(results[key], int)
 
     by_key = {s.source: s for s in target.statuses()}
-    assert by_key["bbc"].last_error is not None
-    assert by_key["bbc"].healthy is False
-    assert by_key["guardian"].last_error is None
-    assert by_key["guardian"].healthy is True
-    assert target.total_count() == 2 * (len(FEEDS) - 2) + 1
+    assert by_key[dead].last_error is not None
+    assert by_key[dead].healthy is False
+    assert by_key[alive[0]].last_error is None
+    # RSS_OK 의 두 항목에는 주제 키워드가 없으므로, 필터를 쓰는 피드는 0건이 된다.
+    expected = sum(0 if FEEDS_BY_KEY[k].needs_topic_filter else 2 for k in alive)
+    assert target.total_count() == expected
 
 
 async def test_failure_keeps_previously_collected_articles(monkeypatch):
     """실패했다고 화면을 비우지 않는다. 마지막으로 성공한 기사를 계속 보여준다."""
     target = ArticleStore()
-    target.record_success("bbc", [Article("bbc", "T", "https://x/1", "2026-09-22T04:00:00+00:00", "s")])
-    target.record_failure("bbc", "HTTP 503")
+    target.record_success(FEEDS[0].key, [Article(FEEDS[0].key, "T", "https://x/1", "2026-09-22T04:00:00+00:00", "s")])
+    target.record_failure(FEEDS[0].key, "HTTP 503")
 
-    status = {s.source: s for s in target.statuses()}["bbc"]
+    status = {s.source: s for s in target.statuses()}[FEEDS[0].key]
     assert status.last_error == "HTTP 503"
     assert status.last_success is not None      # 과거 성공 시각은 남는다
-    assert len(target.latest("bbc")) == 1       # 기사도 남는다
+    assert len(target.latest(FEEDS[0].key)) == 1       # 기사도 남는다
 
 
 # ── 저장소 ────────────────────────────────────────────────────────────────────
 
 
 def _art(i: int, day: int = 22) -> Article:
-    return Article("bbc", f"T{i}", f"https://x/{i}", f"2026-09-{day:02d}T{i % 24:02d}:00:00+00:00", "s")
+    return Article(FEEDS[0].key, f"T{i}", f"https://x/{i}", f"2026-09-{day:02d}T{i % 24:02d}:00:00+00:00", "s")
 
 
 def test_link_is_idempotent_key():
     target = ArticleStore()
-    target.record_success("bbc", [_art(1), _art(1), _art(2)])
-    target.record_success("bbc", [_art(1)])
-    assert len(target.latest("bbc")) == 2
+    target.record_success(FEEDS[0].key, [_art(1), _art(1), _art(2)])
+    target.record_success(FEEDS[0].key, [_art(1)])
+    assert len(target.latest(FEEDS[0].key)) == 2
 
 
 def test_cap_is_enforced_and_keeps_newest(monkeypatch):
     monkeypatch.setattr("app.store.memory.settings.max_articles_per_source", 50)
     target = ArticleStore()
     # 60건을 넣는다. 오래된 날짜 30건 + 최신 날짜 30건.
-    old = [Article("bbc", f"o{i}", f"https://o/{i}", "2026-09-01T00:00:00+00:00", "s") for i in range(30)]
-    new = [Article("bbc", f"n{i}", f"https://n/{i}", "2026-09-22T00:00:00+00:00", "s") for i in range(30)]
-    target.record_success("bbc", old + new)
+    old = [Article(FEEDS[0].key, f"o{i}", f"https://o/{i}", "2026-09-01T00:00:00+00:00", "s") for i in range(30)]
+    new = [Article(FEEDS[0].key, f"n{i}", f"https://n/{i}", "2026-09-22T00:00:00+00:00", "s") for i in range(30)]
+    target.record_success(FEEDS[0].key, old + new)
 
-    kept = target.latest("bbc")
+    kept = target.latest(FEEDS[0].key)
     assert len(kept) == 50
     # 최신 30건은 전부 살아 있어야 한다.
     assert sum(1 for a in kept if a.link.startswith("https://n/")) == 30
@@ -182,8 +194,8 @@ def test_cap_is_enforced_and_keeps_newest(monkeypatch):
 
 def test_latest_is_sorted_newest_first():
     target = ArticleStore()
-    target.record_success("bbc", [_art(1, day=1), _art(2, day=22), _art(3, day=10)])
-    days = [a.published[:10] for a in target.latest("bbc")]
+    target.record_success(FEEDS[0].key, [_art(1, day=1), _art(2, day=22), _art(3, day=10)])
+    days = [a.published[:10] for a in target.latest(FEEDS[0].key)]
     assert days == sorted(days, reverse=True)
 
 
@@ -194,8 +206,13 @@ def test_all_feed_urls_are_verified_and_unique():
     for spec in FEEDS:
         assert spec.verified, f"{spec.key}: 검증 날짜가 비어 있다"
         assert spec.url.startswith("https://")
-    # 한국어 소스가 정확히 하나여야 한다 (비교의 전제).
-    assert [f.key for f in FEEDS if f.lang == "ko"] == ["yna"]
+    # 국내지와 해외지가 모두 있어야 한다 — 언어가 갈려야 '관점 비교' 가 성립한다.
+    langs = {f.lang for f in FEEDS}
+    assert "ko" in langs and "en" in langs, f"언어가 한쪽뿐이다: {langs}"
+    # 타임존 표기 없는 피드에는 보정값이 있어야 한다(국내 업계지 실측 이슈).
+    for spec in FEEDS:
+        if spec.lang == "ko":
+            assert spec.assume_tz_offset_hours == 9.0, f"{spec.key}: KST 보정 누락"
 
 
 # ── 정체 감지 (NHK 실측 사고) ─────────────────────────────────────────────────
@@ -253,11 +270,11 @@ def test_missing_newest_published_is_not_treated_as_stale():
 def test_store_records_newest_article_time_not_fetch_time():
     """newest_published 는 '매체가 쓴 시각' 이다. '우리가 가져온 시각' 과 구별되어야 한다."""
     target = ArticleStore()
-    target.record_success("bbc", [
-        Article("bbc", "old", "https://x/1", "2026-09-01T00:00:00+00:00", "s"),
-        Article("bbc", "new", "https://x/2", "2026-09-22T04:00:00+00:00", "s"),
+    target.record_success(FEEDS[0].key, [
+        Article(FEEDS[0].key, "old", "https://x/1", "2026-09-01T00:00:00+00:00", "s"),
+        Article(FEEDS[0].key, "new", "https://x/2", "2026-09-22T04:00:00+00:00", "s"),
     ])
-    status = {s.source: s for s in target.statuses()}["bbc"]
+    status = {s.source: s for s in target.statuses()}[FEEDS[0].key]
     assert status.newest_published.startswith("2026-09-22T04:00")
     assert status.last_success != status.newest_published
 
@@ -338,3 +355,104 @@ def test_default_poll_interval_is_five_minutes():
 
     assert Settings().poll_interval_seconds == 300
     assert Settings().manual_refresh_min_seconds == 60
+
+
+# ── 타임존 보정 (국내 업계지 실측 이슈) ───────────────────────────────────────
+
+RSS_NAIVE_KST = b"""<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>\xed\x99\x94\xec\x9e\xa5\xed\x92\x88 \xea\xb8\xb0\xec\x82\xac</title><link>https://example.com/k1</link>
+<pubDate>2026-09-22 15:00:00</pubDate></item>
+</channel></rss>"""
+
+
+async def test_naive_local_timestamp_is_corrected_to_utc():
+    """타임존 없는 KST 를 UTC 로 읽으면 기사가 9시간 미래로 밀린다.
+
+    실측: 장업신문 <pubDate>2026-09-22 13:07:33</pubDate> — 표기 없음.
+    보정이 없으면 모든 기사가 '방금' 으로 보이고 정체 판정이 영원히 통과한다.
+    """
+    async with _client(lambda r: httpx.Response(200, content=RSS_NAIVE_KST)) as client:
+        articles, _ = await fetch_feed(client, KST_SPEC)
+    # 15:00 KST == 06:00 UTC
+    assert articles[0].published == "2026-09-22T06:00:00+00:00"
+
+
+async def test_without_offset_the_same_feed_would_be_nine_hours_ahead():
+    """보정값이 없는 스펙으로 같은 피드를 읽으면 9시간 밀린다 — 회귀 감지용 대조군."""
+    no_offset = FeedSpec(
+        key="x", label="x", label_en="x", lang="ko",
+        url="https://example.com/rss", kind="rss", verified="2026-09-22",
+    )
+    async with _client(lambda r: httpx.Response(200, content=RSS_NAIVE_KST)) as client:
+        articles, _ = await fetch_feed(client, no_offset)
+    assert articles[0].published == "2026-09-22T15:00:00+00:00"
+
+
+# ── 주제 필터 ─────────────────────────────────────────────────────────────────
+
+RSS_MIXED = b"""<?xml version="1.0"?><rss version="2.0"><channel>
+<item><title>\xec\x95\x84\xeb\xaa\xa8\xeb\xa0\x88, \xed\x99\x94\xec\x9e\xa5\xed\x92\x88 \xec\x8b\xa0\xec\xa0\x9c\xed\x92\x88</title><link>https://e.com/1</link>
+<pubDate>2026-09-22 10:00:00</pubDate></item>
+<item><title>\xec\xa0\x9c\xec\x95\xbd\xc2\xb7\xeb\xb0\x94\xec\x9d\xb4\xec\x98\xa4 \xed\x95\x99\xec\x88\xa0\xeb\x8c\x80\xed\x9a\x8c</title><link>https://e.com/2</link>
+<pubDate>2026-09-22 09:00:00</pubDate></item>
+</channel></rss>"""
+
+
+def _spec(needs_filter: bool) -> FeedSpec:
+    return FeedSpec(
+        key="t", label="t", label_en="t", lang="ko", url="https://example.com/rss",
+        kind="rss", verified="2026-09-22", assume_tz_offset_hours=9.0,
+        needs_topic_filter=needs_filter,
+    )
+
+
+async def test_topic_filter_drops_off_topic_articles_and_reports_the_count():
+    """주제 밖 기사를 버리되, 몇 건 버렸는지 반드시 보고해야 한다."""
+    async with _client(lambda r: httpx.Response(200, content=RSS_MIXED)) as client:
+        articles, filtered_out = await fetch_feed(client, _spec(True))
+    assert len(articles) == 1
+    assert "화장품" in articles[0].title
+    assert filtered_out == 1, "조용히 버리면 '피드가 조용한 것' 과 구별할 수 없다"
+
+
+async def test_topic_filter_is_skipped_for_dedicated_feeds():
+    """화장품 전문지 기사를 낱말 유무로 다시 판정하면 실적·인사 기사가 잘못 버려진다."""
+    async with _client(lambda r: httpx.Response(200, content=RSS_MIXED)) as client:
+        articles, filtered_out = await fetch_feed(client, _spec(False))
+    assert len(articles) == 2
+    assert filtered_out == 0
+
+
+async def test_filtered_out_count_reaches_source_status(monkeypatch):
+    from app.collector import poller
+
+    monkeypatch.setattr(poller, "make_client",
+                        lambda: _client(lambda r: httpx.Response(200, content=RSS_MIXED)))
+    target = ArticleStore()
+    await poller.poll_once(target)
+    filtered = {s.source: s.filtered_out for s in target.statuses()}
+    # 필터를 쓰는 피드에서만 0이 아니어야 한다.
+    for spec in FEEDS:
+        if spec.needs_topic_filter:
+            assert filtered[spec.key] == 1, f"{spec.key}: 제외 건수가 상태에 안 올라왔다"
+        else:
+            assert filtered[spec.key] == 0
+
+
+def test_topic_matcher_covers_korean_and_english_and_brands():
+    from app.collector.normalize import matches_topic
+
+    assert matches_topic("아모레퍼시픽 3분기 실적")            # 브랜드명
+    assert matches_topic("L'Oreal acquires indie brand")      # 영어 브랜드
+    assert matches_topic("코스맥스, ODM 수주 확대")             # 산업 구조
+    assert matches_topic("Shiseido skincare launch")
+    assert matches_topic("식약처 기능성화장품 심사 개편")        # 규제
+    assert not matches_topic("반도체 수출 증가")                # 주제 밖
+    assert not matches_topic("Bank raises interest rates")
+
+
+def test_all_feeds_are_cosmetics_sources():
+    """주제를 바꿨다면 피드도 전부 바뀌어 있어야 한다 — 옛 일반 뉴스 소스가 남아 있지 않게."""
+    stale_hosts = ("bbci.co.uk", "theguardian.com", "nhk.or.jp", "yna.co.kr", "aljazeera.com")
+    for spec in FEEDS:
+        assert not any(h in spec.url for h in stale_hosts), f"{spec.key}: 일반 뉴스 소스가 남아 있다"
